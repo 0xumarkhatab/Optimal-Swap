@@ -2,10 +2,12 @@ const db = require("../models");
 const OneInch = db.OneInch;
 
 const Web3 = require("web3");
-let { axios } = require("axios");
-
+const axios = require("axios").default;
+const ethers=require("ethers")
 const chainId = 137;
-const web3RpcUrl = "https://polygon-mainnet.infura.io"; // The URL for the Polygon node you want to connect to
+const web3RpcUrl = "https://polygon-mainnet.infura.io/v3/0e88431708fb4d219a28755bf50fb061"; // The URL for the Polygon node you want to connect to
+const web3 = new Web3.Web3(web3RpcUrl);
+
 const walletAddress = "0x927F750555A2e72E4670a45733CBA3d794516Fe8"; // Set your wallet address (replace '0x...xxx' with your actual wallet address)
 const _privateKey =
   "00061993a7a116548044e16ee9cae2781d01cfa86262f5807b82bfdc5dcbb3b0cf8"; // Set the private key of your wallet (replace '0x...xxx' with your actual private key). NEVER SHARE THIS WITH ANYONE!
@@ -17,18 +19,18 @@ const swapAmount = 0.01;
 const broadcastApiUrl =
   "https://tx-gateway.1inch.io/v1.1/" + chainId + "/broadcast";
 const apiBaseUrl = "https://api.1inch.io/v5.2/" + chainId;
-const web3 = new Web3.Web3(web3RpcUrl);
 
-const swapParams = {
-  fromTokenAddress: _1inchTokenAddress, // The address of the token you want to swap from (1INCH)
-  toTokenAddress: _daiTokenAddress, // The address of the token you want to swap to (DAI)
-  amount: web3.utils.toWei(swapAmount, "wei"), // The amount of the fromToken you want to swap (in wei)
-  fromAddress: walletAddress, // Your wallet address from which the swap will be initiated
-  slippage: 1, // The maximum acceptable slippage percentage for the swap (e.g., 1 for 1%)
-  disableEstimate: false, // Whether to disable estimation of swap details (set to true to disable)
-  allowPartialFill: false, // Whether to allow partial filling of the swap order (set to true to allow)
-};
-console.log(swapParams);
+const API_TOKEN = "Bearer MlhEps5HQRxJXRsZahy1AEUtC7PAjksY";
+// const swapParams = {
+//   fromTokenAddress: _1inchTokenAddress, // The address of the token you want to swap from (1INCH)
+//   toTokenAddress: _daiTokenAddress, // The address of the token you want to swap to (DAI)
+//   amount: web3.utils.toWei(swapAmount, "wei"), // The amount of the fromToken you want to swap (in wei)
+//   fromAddress: walletAddress, // Your wallet address from which the swap will be initiated
+//   slippage: 1, // The maximum acceptable slippage percentage for the swap (e.g., 1 for 1%)
+//   disableEstimate: false, // Whether to disable estimation of swap details (set to true to disable)
+//   allowPartialFill: false, // Whether to allow partial filling of the swap order (set to true to allow)
+// };
+// console.log(swapParams);
 
 // Construct full API request URL
 function apiRequestUrl(_url, queryParams) {
@@ -41,75 +43,117 @@ exports.checkAllowance = async function checkAllowance(
 ) {
   try {
     const response = await axios.get(
-      "https://api.1inch.dev/swap/v5.2/137/tokens",
+      "https://api.1inch.dev/swap/v5.2/137/approve/allowance",
       {
         headers: {
-          Authorization: "Bearer WoW4LNRSoGx3Hrb2Py2aQZQMqRmBmgDI",
+          Authorization: API_TOKEN,
+        },
+        params: {
+          tokenAddress,
+          walletAddress,
         },
       }
     );
-    console.log(response);
-    return response;
+    // console.log(response);
+    let allowance = 0;
+    if (response && response.data && response.data.allowance) {
+      allowance = response.data.allowance;
+    }
+    return allowance;
   } catch (e) {
     console.log(e);
   }
 };
 
+// async function checkAllowance(tokenAddress, walletAddress) {
+//   console.log("checking allowance of ", walletAddress, " for ", tokenAddress);
+//   let apiURL = apiRequestUrl("/approve/allowance", {
+//     tokenAddress,
+//     walletAddress,
+//   });
+//   let res = await fetch(apiURL);
+//   console.log(res);
+// }
+
 // Post raw transaction to the API and return transaction hash
 async function broadCastRawTransaction(rawTransaction) {
-  return fetch(broadcastApiUrl, {
-    method: "post",
-    body: JSON.stringify({ rawTransaction }),
-    headers: { "Content-Type": "application/json" },
-  })
-    .then((res) => res.json())
-    .then((res) => {
-      return res.transactionHash;
-    });
+  try {
+    let txHash = await fetch(broadcastApiUrl, {
+      method: "post",
+      body: JSON.stringify({ rawTransaction }),
+      headers: { "Content-Type": "application/json" },
+    })
+      .then((res) => res.json())
+      .then((res) => {
+        console.log("submitted transaction ", res.transactionHash);
+        return res.transactionHash;
+      });
+    return txHash;
+  } catch (e) {
+    console.log("error occured in transaction broadcast!!", e);
+    return e;
+  }
 }
 
 // Sign and post a transaction, return its hash
-async function signAndSendTransaction(transaction) {
+exports.signAndSendTransaction = async function signAndSendTransaction(
+  transaction,
+  _privateKey
+) {
   const { rawTransaction } = await web3.eth.accounts.signTransaction(
     transaction,
-    privateKey
+    _privateKey
   );
-
+  console.log("signed transaction !!!!", rawTransaction);
   return await broadCastRawTransaction(rawTransaction);
-}
+};
 
 // Prepare approval transaction, considering gas limit
-async function buildTxForApproveTradeWithRouter(tokenAddress, amount) {
-  const url = apiRequestUrl(
-    "/approve/transaction",
-    amount ? { tokenAddress, amount } : { tokenAddress }
-  );
+exports.buildTxForApproveTradeWithRouter =
+  async function buildTxForApproveTradeWithRouter(tokenAddress, amount) {
+    const response = await axios.get(
+      "https://api.1inch.dev/swap/v5.2/137/approve/allowance",
+      {
+        headers: {
+          Authorization: API_TOKEN,
+        },
+        params: {
+          tokenAddress,
+          walletAddress,
+        },
+      }
+    );
 
-  const transaction = await fetch(url).then((res) => res.json());
+    const transaction = response.data;
 
-  const gasLimit = await web3.eth.estimateGas({
-    ...transaction,
-    from: walletAddress,
+    const gasLimit = await web3.eth.estimateGas({
+      ...transaction,
+      from: walletAddress,
+    });
+
+    return {
+      ...transaction,
+      gas: gasLimit,
+    };
+  };
+
+// Prepare the transaction data for the swap by making an API request
+exports.buildTxForSwap = async function buildTxForSwap(swapParams) {
+  const response = await axios.get("https://api.1inch.dev/swap/v5.2/137/swap", {
+    headers: {
+      Authorization: API_TOKEN,
+    },
+    params: {
+      ...swapParams,      
+    },
   });
 
-  return {
-    ...transaction,
-    gas: gasLimit,
-  };
-}
-// Prepare the transaction data for the swap by making an API request
-async function buildTxForSwap(swapParams) {
-  const url = apiRequestUrl("/swap", swapParams);
-
   // Fetch the swap transaction details from the API
-  return fetch(url)
-    .then((res) => res.json())
-    .then((res) => res.tx);
-}
+  return response.data;
+};
+
 exports.hello = async function Hello() {
-  res.json({ message: "Welcome to Omni Swap OnInch Franchise." });
-
-
+  res.send("This is the sub router");
 };
 
 // Create and Save a new OneInch
